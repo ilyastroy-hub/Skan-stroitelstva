@@ -78,6 +78,10 @@ nav button.active{color:var(--acc)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{min-height:34px;padding:0 10px;font-size:13px;border-radius:17px;display:flex;align-items:center;gap:6px}
 .chip.off{opacity:.45}
+.sw{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.swb{width:40px;height:40px;min-height:40px;padding:0;border-radius:20px;border:2px solid rgba(128,128,128,.55);font-size:11px}
+.swb.on{outline:3px solid var(--acc);outline-offset:2px}
+#adjBar{padding:0 10px 6px}
 .dot{width:12px;height:12px;border-radius:6px;flex:none;border:1px solid rgba(128,128,128,.6)}
 .scroll{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:14px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
@@ -134,6 +138,12 @@ nav button.active{color:var(--acc)}
         <button data-layer="fin">Отделка</button>
         <button data-layer="blend">Наложение</button>
       </div>
+      <div id="adjBar" class="bar" hidden>
+        <button id="adjL" aria-label="Повернуть против часовой">⟲ 0,5°</button>
+        <button id="adjR" aria-label="Повернуть по часовой">⟳ 0,5°</button>
+        <button id="adjR90" aria-label="Повернуть на 90 градусов">⟳ 90°</button>
+        <button id="adjReset">Сброс</button>
+      </div>
       <label id="blendRow" class="slider" hidden>Снимок монтажа <input type="range" id="blendA" min="0" max="100" value="50"></label>
       <div id="edHint" class="hint"></div>
       <div class="wrap" id="edWrap">
@@ -160,6 +170,7 @@ nav button.active{color:var(--acc)}
         <button data-tool="pan">Двигать</button>
         <button data-tool="route">Трасса</button>
         <button data-tool="anchor">Опора</button>
+        <button data-tool="adj">Подогнать</button>
         <button data-tool="measure">Линейка</button>
         <button data-tool="delete">Удалить</button>
       </div>
@@ -214,7 +225,7 @@ nav button.active{color:var(--acc)}
 </div>
 
 <div id="browser" hidden>
-  <div id="brHead"><button id="brClose" aria-label="Закрыть">✕</button><h2>Объекты и стены</h2><button id="brAdd" class="primary">+ Стена</button></div>
+  <div id="brHead"><button id="brClose" aria-label="Закрыть">✕</button><h2>Объекты и поверхности</h2><button id="brAdd" class="primary">+ Добавить</button></div>
   <div id="brBody"></div>
 </div>
 <div id="capture" hidden>
@@ -373,6 +384,9 @@ function sanitizeBrand(b){
     logo:(typeof b.logo==='string'&&/^data:image\/(png|jpeg);base64,/.test(b.logo)&&b.logo.length<=400000)?b.logo:''};
   return (o.name||o.contact||o.logo)?o:null;
 }
+const KINDS={wall:{name:'Стена',acc:'Стену'},floor:{name:'Пол',acc:'Пол'},ceiling:{name:'Потолок',acc:'Потолок'}};
+const ROUTE_COLORS=['#ff1744','#ff9100','#ffea00','#00e676','#00e5ff','#2979ff','#d500f9','#ff4fa3','#ffffff'];
+const HEXC=/^#[0-9a-fA-F]{6}$/;
 function sanitizeProject(o){
   if(!o||typeof o!=='object') throw new Error('bad');
   const num=(v,min,max)=>{if(typeof v!=='number'||!isFinite(v)||v<min||v>max) throw new Error('num');return v;};
@@ -380,7 +394,7 @@ function sanitizeProject(o){
   if(!Array.isArray(o.routes)||o.routes.length>2000) throw new Error('routes');
   const anchorsIn=Array.isArray(o.anchors)?o.anchors:[];
   if(anchorsIn.length>4) throw new Error('anchors');
-  const p={name:String(o.name||'Чертёж').slice(0,60),obj:String(o.obj||'').slice(0,80),room:String(o.room||'').slice(0,60),
+  const p={name:String(o.name||'Чертёж').slice(0,60),kind:Object.prototype.hasOwnProperty.call(KINDS,o.kind)?o.kind:'wall',obj:String(o.obj||'').slice(0,80),room:String(o.room||'').slice(0,60),
     date:/^\d{4}-\d{2}-\d{2}$/.test(String(o.date||''))?o.date:'',
     scaleCm:(typeof o.scaleCm==='number'&&isFinite(o.scaleCm)&&o.scaleCm>0&&o.scaleCm<1e5)?o.scaleCm:0,
     img:o.img,w:num(o.w,1,10000),h:num(o.h,1,10000),viewOnly:o.viewOnly===true,brand:sanitizeBrand(o.brand),routes:[],anchors:[]};
@@ -389,6 +403,7 @@ function sanitizeProject(o){
     p.routes.push({
       id:uid(),
       type:Object.prototype.hasOwnProperty.call(TYPES,r.type)?r.type:'other',
+      color:HEXC.test(String(r.color||''))?String(r.color).toLowerCase():'',
       depth:String(r.depth==null?'':r.depth).slice(0,20),
       note:String(r.note==null?'':r.note).slice(0,300),
       pts:r.pts.map(pt=>{if(!Array.isArray(pt)||pt.length!==2) throw new Error('pt');return [num(pt[0],-1e5,1e5),num(pt[1],-1e5,1e5)];})
@@ -405,6 +420,8 @@ function sanitizeProject(o){
     p.fin={img:f.img,w:num(f.w,1,10000),h:num(f.h,1,10000),
       date:/^\d{4}-\d{2}-\d{2}$/.test(String(f.date||''))?f.date:'',
       anchors:f.anchors.slice(0,p.anchors.length).map(a=>{if(!a) throw new Error('fa');return {x:num(a.x,-1e5,1e5),y:num(a.y,-1e5,1e5)};})};
+    if(f.adj&&typeof f.adj==='object'){const q=f.adj,ok=(v,a,b)=>typeof v==='number'&&isFinite(v)&&v>=a&&v<=b;
+      if(ok(q.s,0.2,5)&&ok(q.r,-7,7)&&ok(q.dx,-1e5,1e5)&&ok(q.dy,-1e5,1e5)) p.fin.adj={s:q.s,r:q.r,dx:q.dx,dy:q.dy};}
   }else p.fin=null;
   return p;
 }
@@ -461,6 +478,25 @@ const S={projects:[],cur:null,img:null,tool:'pan',draft:[],view:{s:1,tx:0,ty:0},
 const ED={size:{w:0,h:0,d:1}};
 const CAM={stream:null,mode:'off',pts:[],T:null,adj:IDENT,size:null,frozen:false,alpha:0.85,ghost:0,probe:false,probeAt:null,hidden:new Set()};
 const LETTERS=['A','B','C','D'];
+const routeColor=r=>(r&&HEXC.test(r.color||'')?r.color:(TYPES[r&&r.type]||TYPES.other).color);
+const kindOf=p=>KINDS[p&&p.kind]||KINDS.wall;
+function cleanText(t){return String(t==null?'':t).replace(/[^\p{L}\p{N} .,:;()№#+\/«»"'_–—-]/gu,'').replace(/\s+/g,' ').trim();}
+function wallCodes(list){
+  const cnt=new Map(),m=new Map();
+  for(const p of list){
+    const room=cleanText(p.room).replace(/[^\p{L}\p{N}]/gu,'').slice(0,3).toUpperCase();
+    const key=(p.obj||'')+'|'+(p.kind||'wall')+'|'+room;
+    const n=(cnt.get(key)||0)+1;cnt.set(key,n);
+    const code=room?room+'-'+n:String(n);
+    m.set(p,{code,label:kindOf(p).name+' '+code});
+  }
+  return m;
+}
+function defaultName(kind,obj,room){
+  const k=KINDS[kind]||KINDS.wall;
+  const n=S.projects.filter(x=>(x.kind||'wall')===kind&&(x.obj||'')===(obj||'')&&(x.room||'')===(room||'')).length+1;
+  return k.name+' '+n;
+}
 
 let lastSave='';
 function paintSave(){const off=navigator.onLine===false;$('#saveState').textContent=lastSave+(off?(lastSave?' · ':'')+'нет сети, работает офлайн':'');}
@@ -499,6 +535,18 @@ function modal(o){
     const inputs={};
     for(const f of (o.fields||[])){
       const id='f_'+f.key;let inp;
+      if(f.type==='swatch'){
+        inp=el('input',{id,type:'hidden'});inp.value=f.value||'';
+        const row=el('div',{class:'sw'});
+        const mk=(val,txt,css)=>{
+          const b=el('button',{type:'button',class:'swb'+((inp.value||'')===val?' on':''),title:txt,'aria-label':txt,style:css||null},val?'':'авто');
+          b.addEventListener('click',()=>{inp.value=val;row.querySelectorAll('.swb').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
+          row.append(b);
+        };
+        mk('','По типу сети');
+        for(const c of ROUTE_COLORS) mk(c,c,'background:'+c);
+        inputs[f.key]=inp;form.append(el('label',null,f.label),row,inp);continue;
+      }
       if(f.type==='select'){
         inp=el('select',{id});
         for(const [v,l] of f.options) inp.append(el('option',{value:v},l));
@@ -592,17 +640,17 @@ function strokeLine(ctx,pts,color,w){
   ctx.lineJoin='round';ctx.lineCap='round';
   ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);
   for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
-  ctx.strokeStyle='rgba(0,0,0,.65)';ctx.lineWidth=w+3;ctx.stroke();
+  ctx.strokeStyle='rgba(0,0,0,.7)';ctx.lineWidth=w+3.5;ctx.stroke();
   ctx.strokeStyle=color;ctx.lineWidth=w;ctx.stroke();
 }
 function drawRoutes(ctx,p,map,o){
   for(const r of p.routes){
     if(o.hidden&&o.hidden.has(r.type)) continue;
-    const t=TYPES[r.type]||TYPES.other;
+    const t=TYPES[r.type]||TYPES.other,col=routeColor(r);
     const pts=r.pts.map(map);
-    strokeLine(ctx,pts,t.color,o.width);
+    strokeLine(ctx,pts,col,o.width);
     if(o.vertices){
-      ctx.fillStyle=t.color;
+      ctx.fillStyle=col;
       for(const q of pts){ctx.beginPath();ctx.arc(q[0],q[1],3.5,0,Math.PI*2);ctx.fill();}
     }
     if(o.labels){
@@ -703,7 +751,7 @@ async function edTap(x,y){
   const p=S.cur;if(!p) return;
   const v=S.view,ix=(x-v.tx)/v.s,iy=(y-v.ty)/v.s;
   if(S.layer!=='rough'){
-    if(S.layer==='fin'&&S.tool==='anchor') finAnchorTap(ix,iy);
+    if(S.layer==='fin'&&S.tool==='anchor') finAnchorTap(ix,iy,x,y);
     return;
   }
   if(p.viewOnly&&(S.tool==='route'||S.tool==='anchor'||S.tool==='delete')) return;
@@ -741,10 +789,19 @@ async function edTap(x,y){
 }
 gestures(cv,{
   onTap:p=>edTap(p.x,p.y),
-  onDrag:(dx,dy)=>{S.view.tx+=dx;S.view.ty+=dy;renderEditor();},
+  onDrag:(dx,dy)=>{
+    if(S.layer==='blend'&&S.tool==='adj'&&S.cur&&S.cur.fin&&!RO()){adjStep(1,0,0,0,dx/S.view.s,dy/S.view.s);return;}
+    S.view.tx+=dx;S.view.ty+=dy;renderEditor();
+  },
   onPinch:(a0,b0,a1,b1)=>{
     const d0=Math.hypot(b0.x-a0.x,b0.y-a0.y),d1=Math.hypot(b1.x-a1.x,b1.y-a1.y);
     if(d0<8) return;
+    if(S.layer==='blend'&&S.tool==='adj'&&S.cur&&S.cur.fin&&!RO()){
+      const v=S.view,f=d1/d0,da=Math.atan2(b1.y-a1.y,b1.x-a1.x)-Math.atan2(b0.y-a0.y,b0.x-a0.x);
+      const m0={x:(a0.x+b0.x)/2,y:(a0.y+b0.y)/2},m1={x:(a1.x+b1.x)/2,y:(a1.y+b1.y)/2};
+      adjStep(f*Math.cos(da),f*Math.sin(da),(m0.x-v.tx)/v.s,(m0.y-v.ty)/v.s,(m1.x-m0.x)/v.s,(m1.y-m0.y)/v.s);
+      return;
+    }
     zoomAt({x:(a0.x+b0.x)/2,y:(a0.y+b0.y)/2},{x:(a1.x+b1.x)/2,y:(a1.y+b1.y)/2},d1/d0);
   },
   onWheel:(e,p)=>zoomAt(p,p,Math.exp(-e.deltaY*0.0015))
@@ -755,7 +812,8 @@ const HINTS={
   route:'Касайтесь по ходу трассы, чтобы ставить точки. Затем нажмите «Готово».',
   anchor:'Коснитесь точки, которую легко найти в помещении: угол стены, розетка, косяк двери. Нужно от 2 до 4.',
   measure:'Коснитесь двух точек, чтобы измерить расстояние. Масштаб задаётся по опорам A и B.',
-  delete:'Коснитесь трассы или опорной точки, чтобы удалить.'
+  delete:'Коснитесь трассы или опорной точки, чтобы удалить.',
+  adj:'Подгонка: один палец сдвигает монтаж относительно отделки, два пальца поворачивают и меняют масштаб. Кнопки выше поворачивают точнее.'
 };
 function setTool(t){S.tool=t;S.meas=[];updateEditorUI();renderEditor();}
 function updateEditorUI(){
@@ -769,13 +827,14 @@ function updateEditorUI(){
   $$('#toolBar button').forEach(b=>{
     const t=b.dataset.tool,L=S.layer;
     const ro=!!(S.cur&&S.cur.viewOnly);
-    b.hidden=ro?!(t==='pan'||(t==='measure'&&L==='rough')):(L==='rough'?false:(L==='fin'?!(t==='pan'||t==='anchor'):t!=='pan'));
+    b.hidden=ro?!(t==='pan'||(t==='measure'&&L==='rough')):(L==='rough'?t==='adj':(L==='fin'?!(t==='pan'||t==='anchor'):!(t==='pan'||t==='adj')));
     b.classList.toggle('on',t===S.tool);
   });
   const cp=S.cur;
   $('#layerBar').hidden=!has;
   $$('#layerBar button').forEach(b=>{b.classList.toggle('on',b.dataset.layer===S.layer);b.style.opacity=(!cp||cp.fin||b.dataset.layer==='rough')?'':'.6';});
   $('#blendRow').hidden=!(has&&S.layer==='blend');
+  $('#adjBar').hidden=!(has&&S.layer==='blend'&&!cp.viewOnly&&S.tool==='adj');
   $('#finBar').hidden=!(has&&S.layer==='fin'&&cp.fin&&cp.fin.anchors.length>0&&!cp.viewOnly);
 }
 $$('#toolBar button').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
@@ -790,6 +849,7 @@ function routeFields(r){
   return [
     {key:'type',label:'Тип',type:'select',options:Object.entries(TYPES).map(([k,t])=>[k,t.name]),value:r.type},
     {key:'depth',label:'Глубина от поверхности, см (необязательно)',value:r.depth||'',max:20,inputmode:'decimal'},
+    {key:'color',label:'Цвет линии',type:'swatch',value:r.color||''},
     {key:'note',label:'Заметка (необязательно)',value:r.note||'',max:300}
   ];
 }
@@ -797,7 +857,7 @@ $('#dDone').addEventListener('click',async()=>{
   if(S.draft.length<2){toast('Нужно минимум 2 точки');return;}
   const v=await modal({title:'Что это за трасса?',fields:routeFields({type:S.lastType,depth:'',note:''}),ok:'Добавить'});
   if(!v) return;
-  S.cur.routes.push({id:uid(),type:v.type,depth:v.depth.trim(),note:v.note.trim(),pts:S.draft.slice()});
+  S.cur.routes.push({id:uid(),type:v.type,color:v.color||'',depth:v.depth.trim(),note:v.note.trim(),pts:S.draft.slice()});
   S.lastType=v.type;S.draft=[];
   save();updateEditorUI();renderEditor();renderData();renderChips();
 });
@@ -808,19 +868,45 @@ function frame(){
   if(S.layer==='rough'||!p.fin) return {im:S.img,w:p.w,h:p.h};
   return {im:S.imgFin,w:p.fin.w,h:p.fin.h};
 }
+function adjOf(f){const a=f&&f.adj;return a?{r:a.r||0,s:a.s||1,dx:a.dx||0,dy:a.dy||0}:{r:0,s:1,dx:0,dy:0};}
+function hasAdj(f){const a=adjOf(f);return !!(a.r||a.s!==1||a.dx||a.dy);}
 function alignInfo(p){
   if(!p||!p.fin) return null;
   const n=Math.min(p.fin.anchors.length,p.anchors.length);
   if(n<2) return null;
   const P=p.anchors.slice(0,n).map(a=>[a.x,a.y]),Q=p.fin.anchors.slice(0,n).map(a=>[a.x,a.y]);
-  const T=simFromPairs(P,Q);if(!T) return null;
+  let T=simFromPairs(P,Q);if(!T) return null;
+  if(hasAdj(p.fin)){
+    const d=adjOf(p.fin),ka=d.s*Math.cos(d.r),kb=d.s*Math.sin(d.r),cx0=p.fin.w/2,cy0=p.fin.h/2,ux=T.tx-cx0,uy=T.ty-cy0;
+    T={a:ka*T.a-kb*T.b,b:ka*T.b+kb*T.a,tx:cx0+ka*ux-kb*uy+d.dx,ty:cy0+ka*uy+kb*ux+d.dy};
+  }
   const sc=Math.hypot(T.a,T.b);if(sc<1e-6) return null;
   return {T,n,s:sc,rms:rmsError(P,Q,T)};
 }
 function isLinked(p){return !!alignInfo(p);}
 function linkBadge(p){return p.fin?el('div',{class:'badge '+(isLinked(p)?'ok':'no')},isLinked(p)?'✓ Привязано':'Не привязано: отметьте опорные точки на снимке после отделки'):null;}
 function fmtErr(cm){return cm<10?cm.toFixed(1).replace('.',',')+' см':fmtLen(cm);}
+function adjStep(gr,gi,qx,qy,tx,ty){
+  const f=S.cur&&S.cur.fin;if(!f||RO()) return;
+  const d=adjOf(f),ka=d.s*Math.cos(d.r),kb=d.s*Math.sin(d.r),na=gr*ka-gi*kb,nb=gr*kb+gi*ka;
+  const sc=Math.hypot(na,nb);if(sc<0.2||sc>5) return;
+  const cx0=f.w/2,cy0=f.h/2,qx0=qx-cx0,qy0=qy-cy0,or=1-gr,oi=-gi;
+  f.adj={s:sc,r:Math.atan2(nb,na),dx:or*qx0-oi*qy0+gr*d.dx-gi*d.dy+(tx||0),dy:or*qy0+oi*qx0+gr*d.dy+gi*d.dx+(ty||0)};
+  save();renderEditor();
+}
+function adjRotate(deg){
+  const v=S.view,q=[(ED.size.w/2-v.tx)/v.s,(ED.size.h/2-v.ty)/v.s],a=deg*Math.PI/180;
+  adjStep(Math.cos(a),Math.sin(a),q[0],q[1]);
+}
+$('#adjL').addEventListener('click',()=>adjRotate(-0.5));
+$('#adjR').addEventListener('click',()=>adjRotate(0.5));
+$('#adjR90').addEventListener('click',()=>adjRotate(90));
+$('#adjReset').addEventListener('click',()=>{const f=S.cur&&S.cur.fin;if(!f||RO()) return;f.adj=null;save();renderEditor();renderData();toast('Подгонка сброшена');});
 function alignText(p,A){
+  if(p.fin&&hasAdj(p.fin)&&A.n>=2) return 'Применена ручная подгонка (поворот, сдвиг, масштаб). '+alignText0(p,A);
+  return alignText0(p,A);
+}
+function alignText0(p,A){
   if(A.n<3) return 'Совмещение по 2 точкам: ошибку оценить нельзя, отметьте ещё одну точку для проверки.';
   const k=pxPerCm(p);
   if(k){const cm=A.rms/(k*A.s);return 'Ошибка совмещения ≈ '+fmtErr(cm)+(cm>3?'. Это много: проверьте точки или снимайте стену ровнее.':'.');}
@@ -833,9 +919,11 @@ function hintText(){
   if(S.layer==='fin'&&p&&p.fin){
     const i=p.fin.anchors.length,a=p.anchors[i];
     if(S.tool==='anchor'&&a) return 'Коснитесь на этом снимке точки '+LETTERS[i]+(a.name?' («'+a.name+'»)':'')+' — той же, что на снимке монтажа.';
+    if(S.tool==='anchor') return 'Все точки отмечены. Коснитесь рядом с точкой, чтобы перенести её. Для точности увеличьте снимок двумя пальцами.';
     const A=alignInfo(p);
     return 'Снимок после отделки, сети показаны по совмещению. '+(A?alignText(p,A):'Отметьте минимум 2 опорные точки.');
   }
+  if(S.layer==='blend'&&S.tool==='adj') return HINTS.adj;
   if(S.layer==='blend') return 'Наложение: ползунок задаёт прозрачность снимка монтажа поверх отделки. Сети показаны линиями.';
   return HINTS[S.tool];
 }
@@ -847,10 +935,19 @@ function setLayer(L){
   S.tool=(L==='fin'&&!p.viewOnly&&p.fin.anchors.length<p.anchors.length)?'anchor':'pan';
   fitView();updateEditorUI();renderEditor();
 }
-function finAnchorTap(ix,iy){
+function finAnchorTap(ix,iy,sx,sy){
   if(RO()) return;
   const p=S.cur,f=p&&p.fin;if(!f) return;
-  if(f.anchors.length>=p.anchors.length){toast('Все точки отмечены');return;}
+  if(f.anchors.length>=p.anchors.length){
+    let bi=-1,bd=1e9;
+    f.anchors.forEach((a,i)=>{const q=edToScr([a.x,a.y]),d=Math.hypot(q[0]-sx,q[1]-sy);if(d<bd){bd=d;bi=i;}});
+    if(bi<0||bd>90){toast('Все точки уже отмечены. Чтобы передвинуть одну, коснитесь рядом с ней.',4000);return;}
+    f.anchors[bi].x=ix;f.anchors[bi].y=iy;
+    const A=alignInfo(p);
+    save();renderHeader();renderEditor();renderData();
+    toast('Точка '+LETTERS[bi]+' перенесена. '+(A?alignText(p,A):''),5000);
+    return;
+  }
   f.anchors.push({x:ix,y:iy});
   const nx=p.anchors[f.anchors.length],A=alignInfo(p);
   if(nx) toast('Теперь точка '+LETTERS[f.anchors.length]+(nx.name?' («'+nx.name+'»)':'')+'.',3500);
@@ -966,14 +1063,15 @@ async function addDrawing(file){
 function todayLocal(){const d=new Date(),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
 async function createProject(r,fname){
   const cur=S.cur;
-  const v=await modal({title:'Новая стена',text:'Укажите объект, комнату и название стены, чтобы потом быстро найти снимок.',fields:[
+  const v=await modal({title:'Новая поверхность',text:'Выберите, что сняли, и укажите объект и комнату, чтобы потом быстро найти снимок.',fields:[
+    {key:'kind',label:'Что снято',type:'select',options:Object.entries(KINDS).map(([k,t])=>[k,t.name]),value:cur&&cur.kind?cur.kind:'wall'},
     {key:'obj',label:'Объект',value:cur?cur.obj||'':'',max:80,placeholder:'Например, квартира на Ленина, 5',suggest:objNames()},
     {key:'room',label:'Комната',value:cur?cur.room||'':'',max:60,placeholder:'Например, кухня',suggest:roomNames(cur?cur.obj||'':'')},
-    {key:'name',label:'Стена или название',value:fname,max:60,placeholder:'Например, северная стена'},
+    {key:'name',label:'Название (необязательно)',value:'',max:60,placeholder:'Если пусто, будет «'+defaultName(cur&&cur.kind||'wall',cur?cur.obj:'',cur?cur.room:'')+'»'},
     {key:'date',label:'Дата съёмки',type:'date',value:todayLocal()}
   ],ok:'Создать'});
   if(!v){toast('Снимок не сохранён');return;}
-  const p={id:uid(),name:v.name.trim()||'Стена',obj:v.obj.trim(),room:v.room.trim(),date:v.date||todayLocal(),scaleCm:0,img:r.img,w:r.w,h:r.h,routes:[],anchors:[],fin:null,updated:Date.now()};
+  const p={id:uid(),name:v.name.trim()||defaultName(v.kind,v.obj.trim(),v.room.trim()),kind:v.kind,obj:v.obj.trim(),room:v.room.trim(),date:v.date||todayLocal(),scaleCm:0,img:r.img,w:r.w,h:r.h,routes:[],anchors:[],fin:null,updated:Date.now()};
   S.projects.push(p);setCurrent(p);save();switchTab('draw');
   toast('Отметьте опорные точки (угол, розетка), затем трассы.',4500);
 }
@@ -994,7 +1092,7 @@ const fileImg=$('#fileImg');
 const fileCam=$('#fileCam');
 fileCam.addEventListener('change',()=>{const f=fileCam.files[0];fileCam.value='';addDrawing(f);});
 function addWallMenu(){
-  modal({title:'Новая стена',text:'Сфотографируйте открытую стену или загрузите готовый чертёж.',ok:'Снять стену',extra:[{label:'Выбрать файл',action:()=>pickFile(false)}],cancel:'Отмена'}).then(v=>{if(v===true) capOpen();});
+  modal({title:'Новая поверхность',text:'Сфотографируйте открытую стену, пол или потолок либо загрузите готовый чертёж.',ok:'Снять',extra:[{label:'Выбрать файл',action:()=>pickFile(false)}],cancel:'Отмена'}).then(v=>{if(v===true) capOpen();});
 }
 $('#btnAdd').addEventListener('click',addWallMenu);
 $('#btnShoot').addEventListener('click',()=>capOpen());
@@ -1005,8 +1103,8 @@ $('#projBtn').addEventListener('click',()=>openBrowser());
 
 function renderHeader(){
   const b=$('#projBtn'),p=S.cur;b.replaceChildren();
-  if(!p) b.append(el('b',null,'Нет стен ▾'),el('span',null,'Нажмите, чтобы добавить'));
-  else b.append(el('b',null,(p.viewOnly?'👁 ':'')+p.name+' ▾'),el('span',null,(isLinked(p)?'✓ привязано · ':'')+([p.obj,p.room].filter(Boolean).join(' › ')||'Без объекта и комнаты')));
+  if(!p) b.append(el('b',null,'Нет снимков ▾'),el('span',null,'Нажмите, чтобы добавить'));
+  else b.append(el('b',null,(p.viewOnly?'👁 ':'')+p.name+' ▾'),el('span',null,(isLinked(p)?'✓ привязано · ':'')+([p.obj,p.room,p.kind&&p.kind!=='wall'?kindOf(p).name:''].filter(Boolean).join(' › ')||'Без объекта и комнаты')));
   if(!$('#browser').hidden) renderBrowser();
 }
 
@@ -1019,7 +1117,7 @@ function download(name,text){
 function scopeOptions(p){
   const sameObj=p.obj?S.projects.filter(x=>(x.obj||'')===p.obj):[p];
   const sameRoom=p.room?S.projects.filter(x=>(x.obj||'')===(p.obj||'')&&x.room===p.room):[p];
-  const opts=[['one','Только эта стена («'+p.name+'»)']];
+  const opts=[['one','Только «'+p.name+'»']];
   if(p.room&&sameRoom.length>1) opts.push(['room','Все стены комнаты «'+p.room+'» ('+sameRoom.length+')']);
   if(p.obj&&sameObj.length>1) opts.push(['obj','Весь объект «'+p.obj+'» ('+sameObj.length+')']);
   if(S.projects.length>1&&S.projects.length>sameObj.length) opts.push(['all','Все стены ('+S.projects.length+')']);
@@ -1100,7 +1198,7 @@ async function editRoute(r){
   if(RO()) return;
   const v=await modal({title:'Изменить трассу',fields:routeFields(r),ok:'Сохранить'});
   if(!v) return;
-  r.type=v.type;r.depth=v.depth.trim();r.note=v.note.trim();
+  r.type=v.type;r.color=v.color||'';r.depth=v.depth.trim();r.note=v.note.trim();
   save();renderEditor();renderData();renderChips();
 }
 async function delRoute(r){
@@ -1150,7 +1248,10 @@ function renderData(){
   const dateInp=el('input',{type:'date'});dateInp.value=p.date||'';
   dateInp.addEventListener('change',()=>{p.date=dateInp.value;save();});
   const k=pxPerCm(p);
-  body.append(el('div',{class:'card'},el('h2',null,'Стена'),
+  const kindSel=el('select',null,...Object.entries(KINDS).map(([k,t])=>el('option',{value:k},t.name)));kindSel.value=p.kind||'wall';
+  kindSel.addEventListener('change',()=>{p.kind=kindSel.value;save();renderHeader();renderData();});
+  body.append(el('div',{class:'card'},el('h2',null,kindOf(p).name),
+    el('label',{class:'mut'},'Что это'),kindSel,
     el('label',{class:'mut'},'Название'),nameInp,
     el('label',{class:'mut'},'Объект'),objInp,
     el('label',{class:'mut'},'Комната'),roomInp,
@@ -1167,7 +1268,7 @@ function renderData(){
   for(const r of p.routes){
     const t=TYPES[r.type]||TYPES.other;
     rc.append(el('div',{class:'item'},
-      el('span',{class:'dot',style:'background:'+t.color}),
+      el('span',{class:'dot',style:'background:'+routeColor(r)}),
       el('div',{class:'grow'},el('b',null,t.name),el('div',{class:'mut'},[routeLen(p,r),r.depth?'глубина '+r.depth+' см':'',r.note].filter(Boolean).join(' · ')||'без заметки')),
       el('button',{onclick:()=>editRoute(r)},'Изменить'),
       el('button',{class:'danger',onclick:()=>delRoute(r)},'Удалить')));
@@ -1528,13 +1629,13 @@ function put(D,text,o){
 async function ensure(D,h,onNew){if(D.y+h>BOT){await D.close();D.open();if(onNew) onNew();}}
 function drawRepRoutes(x,p,map){
   p.routes.forEach((r,i)=>{
-    const t=TYPES[r.type]||TYPES.other,pts=r.pts.map(map);
+    const col=routeColor(r),pts=r.pts.map(map);
     x.lineJoin='round';x.lineCap='round';x.beginPath();x.moveTo(pts[0][0],pts[0][1]);
     for(let j=1;j<pts.length;j++) x.lineTo(pts[j][0],pts[j][1]);
-    x.strokeStyle='rgba(0,0,0,.7)';x.lineWidth=10;x.stroke();x.strokeStyle=t.color;x.lineWidth=6;x.stroke();
+    x.strokeStyle='rgba(0,0,0,.8)';x.lineWidth=11;x.stroke();x.strokeStyle=col;x.lineWidth=6;x.stroke();
     const m=polyMid(pts);
     x.beginPath();x.arc(m[0],m[1],18,0,Math.PI*2);x.fillStyle='#fff';x.fill();
-    x.lineWidth=4;x.strokeStyle=t.color==='#ffffff'?'#000':t.color;x.stroke();
+    x.lineWidth=4;x.strokeStyle=col.toLowerCase()==='#ffffff'?'#000':col;x.stroke();
     x.font=fontOf(22,true);x.fillStyle='#000';x.textAlign='center';x.textBaseline='middle';x.fillText(String(i+1),m[0],m[1]+1);
   });
   x.textAlign='left';x.textBaseline='alphabetic';
@@ -1572,8 +1673,27 @@ async function coverPage(D,list){
   if(D.meta.obj) put(D,D.meta.obj,{size:34,bold:true});
   if(D.meta.client) put(D,'Заказчик: '+D.meta.client,{size:26,color:'#344054'});
   put(D,'Дата составления: '+fmtDate(todayLocal()),{size:26,color:'#344054'});
-  put(D,'Стен в паспорте: '+list.length,{size:26,color:'#344054'});
+  put(D,'Позиций в паспорте: '+list.length,{size:26,color:'#344054'});
   D.y+=30;
+  const linked=list.filter(p=>p.fin&&alignInfo(p)).slice(0,2);
+  if(linked.length){
+    await ensure(D,780);
+    put(D,'Совмещённый вид',{size:32,bold:true});
+    put(D,'Снимок после отделки, поверх него снимок монтажа (полупрозрачно) и трассы.',{size:22,color:'#475467'});D.y+=10;
+    const gap=30,maxW=linked.length===1?PW-2*MG:(PW-2*MG-gap)/2,maxH=640,top=D.y;let used=0;
+    for(let i=0;i<linked.length;i++){
+      const p=linked[i],A=alignInfo(p),imF=await loadImg(p.fin.img),imR=await loadImg(p.img);
+      const sc=Math.min(maxW/p.fin.w,maxH/p.fin.h),w=p.fin.w*sc,h=p.fin.h*sc;
+      const x0=MG+i*(maxW+gap)+(maxW-w)/2;
+      drawComposite(D,p,A,imF,imR,x0,top,sc);
+      D.x.font=fontOf(22,true);D.x.fillStyle='#101828';D.x.textAlign='left';
+      D.x.fillText(fitText(D.x,D.codes.get(p).label,maxW),MG+i*(maxW+gap),top+h+30);
+      used=Math.max(used,h+44);
+    }
+    D.y=top+used+10;
+    if(list.filter(p=>p.fin&&alignInfo(p)).length>2) put(D,'Остальные совмещённые виды — на страницах позиций.',{size:22,color:'#667085'});
+    D.y+=20;
+  }
 
   const agg={};let noScale=0;
   for(const p of list){
@@ -1597,21 +1717,23 @@ async function coverPage(D,list){
 
   await ensure(D,160);
   put(D,'Состав паспорта',{size:32,bold:true});D.y+=8;
-  const cols=[MG+10,MG+590,MG+810,MG+940];
+  const cols=[MG+10,MG+250,MG+700,MG+830,MG+940];
   const head=()=>{
     D.x.fillStyle='#f2f4f7';D.x.fillRect(MG,D.y,PW-2*MG,48);
     D.x.font=fontOf(22,true);D.x.fillStyle='#344054';D.x.textAlign='left';
-    ['Комната / стена','Съёмка','Трасс','Отделка'].forEach((h,i)=>D.x.fillText(h,cols[i],D.y+32));
+    ['Код','Объект · комната · название','Съёмка','Трасс','Отделка'].forEach((h,i)=>D.x.fillText(h,cols[i],D.y+32));
     D.y+=54;
   };
   head();
   for(const p of list){
     await ensure(D,50,head);
     D.x.font=fontOf(22,false);D.x.fillStyle='#101828';D.x.textAlign='left';
-    D.x.fillText(fitText(D.x,wallLabel(D,p,' / '),560),cols[0],D.y+31);
-    D.x.fillText(fmtDate(p.date)||'—',cols[1],D.y+31);
-    D.x.fillText(String(p.routes.length),cols[2],D.y+31);
-    D.x.fillText(p.fin?(fmtDate(p.fin.date)||'есть'):'нет',cols[3],D.y+31);
+    D.x.font=fontOf(22,true);D.x.fillText(fitText(D.x,D.codes.get(p).label,230),cols[0],D.y+31);
+    D.x.font=fontOf(22,false);
+    D.x.fillText(fitText(D.x,wallSub(D,p)||'—',cols[2]-cols[1]-14),cols[1],D.y+31);
+    D.x.fillText(fmtDate(p.date)||'—',cols[2],D.y+31);
+    D.x.fillText(String(p.routes.length),cols[3],D.y+31);
+    D.x.fillText(p.fin?(fmtDate(p.fin.date)||'есть'):'нет',cols[4],D.y+31);
     D.x.strokeStyle='#e4e7ec';D.x.lineWidth=1.5;D.x.beginPath();D.x.moveTo(MG,D.y+46);D.x.lineTo(PW-MG,D.y+46);D.x.stroke();
     D.y+=48;
   }
@@ -1648,7 +1770,7 @@ async function routeTable(D,p,title){
     x.strokeStyle='#e4e7ec';x.lineWidth=1.5;x.beginPath();x.moveTo(MG,y+rowH);x.lineTo(PW-MG,y+rowH);x.stroke();
     x.textAlign='left';x.textBaseline='alphabetic';
     x.font=fontOf(22,true);x.fillStyle='#000';x.fillText(String(i+1),cols[0],y+31);
-    x.fillStyle=t.color;x.fillRect(cols[1],y+11,22,22);x.strokeStyle='#98a2b3';x.lineWidth=1.5;x.strokeRect(cols[1],y+11,22,22);
+    x.fillStyle=routeColor(r);x.fillRect(cols[1],y+11,22,22);x.strokeStyle='#98a2b3';x.lineWidth=1.5;x.strokeRect(cols[1],y+11,22,22);
     x.font=fontOf(22,false);x.fillStyle='#101828';
     x.fillText(fitText(x,t.name,cols[2]-cols[1]-40),cols[1]+32,y+31);
     x.fillText(r.depth?r.depth+' см':'—',cols[2],y+31);
@@ -1659,11 +1781,23 @@ async function routeTable(D,p,title){
     D.y+=rowH;
   }
 }
-function wallLabel(D,p,sep){return [D.meta.multiObj&&p.obj?p.obj:'',p.room,p.name].filter(Boolean).join(sep);}
+function wallLabel(D,p,sep){const c=D.codes&&D.codes.get(p);return c?c.label:kindOf(p).name;}
+function wallSub(D,p){return [D.meta.multiObj?cleanText(p.obj):'',cleanText(p.room),cleanText(p.name)].filter(Boolean).join(' · ');}
+function drawComposite(D,p,A,imFin,imRough,x0,y0,s){
+  const x=D.x;
+  x.drawImage(imFin,x0,y0,p.fin.w*s,p.fin.h*s);
+  x.save();x.beginPath();x.rect(x0,y0,p.fin.w*s,p.fin.h*s);x.clip();
+  x.translate(x0,y0);x.scale(s,s);x.globalAlpha=0.3;
+  x.transform(A.T.a,A.T.b,-A.T.b,A.T.a,A.T.tx,A.T.ty);x.drawImage(imRough,0,0,p.w,p.h);
+  x.restore();
+  x.strokeStyle='#d0d5dd';x.lineWidth=2;x.strokeRect(x0,y0,p.fin.w*s,p.fin.h*s);
+  drawRepRoutes(x,p,pt=>{const q=applySim(A.T,pt);return [x0+q[0]*s,y0+q[1]*s];});
+}
 async function wallPages(D,p){
-  const title=wallLabel(D,p,' — '),k=pxPerCm(p);
+  const title=wallLabel(D,p),k=pxPerCm(p);
   await D.close();D.open();
   put(D,title,{size:40,bold:true});
+  if(wallSub(D,p)) put(D,wallSub(D,p),{size:26,color:'#344054'});
   put(D,'Съёмка при монтаже: '+(fmtDate(p.date)||'дата не указана')+' · '+(k?'масштаб задан (расстояние A–B '+fmtLen(p.scaleCm)+')':'масштаб не задан'),{size:24,color:'#475467'});
   D.y+=14;
   const im=await loadImg(p.img),maxW=PW-2*MG,maxH=800;
@@ -1689,18 +1823,18 @@ async function finishPage(D,p,title){
   put(D,'Снимок после отделки: '+(fmtDate(p.fin.date)||'дата не указана'),{size:24,color:'#475467'});D.y+=14;
   const A=alignInfo(p),im=await loadImg(p.fin.img),maxW=PW-2*MG,maxH=800;
   const s=Math.min(maxW/p.fin.w,maxH/p.fin.h),dw=p.fin.w*s,dh=p.fin.h*s,x0=MG+(maxW-dw)/2,y0=D.y;
-  D.x.drawImage(im,x0,y0,dw,dh);
-  D.x.strokeStyle='#d0d5dd';D.x.lineWidth=2;D.x.strokeRect(x0,y0,dw,dh);
   const map=pt=>[x0+pt[0]*s,y0+pt[1]*s];
-  if(A) drawRepRoutes(D.x,p,pt=>map(applySim(A.T,pt)));
+  if(A) drawComposite(D,p,A,im,await loadImg(p.img),x0,y0,s);
+  else{D.x.drawImage(im,x0,y0,dw,dh);D.x.strokeStyle='#d0d5dd';D.x.lineWidth=2;D.x.strokeRect(x0,y0,dw,dh);}
   drawRepAnchors(D.x,p.fin.anchors,map);
   D.y=y0+dh+30;
-  put(D,A?'Трассы перенесены со снимка монтажа по совмещению опорных точек, номера совпадают с таблицей на предыдущей странице. '+alignText(p,A):'Совмещение со снимком монтажа не выполнено: на снимке отделки отмечено меньше двух опорных точек, поэтому трассы не показаны.',{size:24,color:'#344054'});
+  put(D,A?'Показан снимок после отделки, поверх него снимок монтажа (полупрозрачно) и трассы. Номера совпадают с таблицей на предыдущей странице. '+alignText(p,A):'Совмещение со снимком монтажа не выполнено: на снимке отделки отмечено меньше двух опорных точек, поэтому трассы не показаны.',{size:24,color:'#344054'});
 }
 async function buildReport(list,meta){
   list=list.slice().sort((a,b)=>(a.obj||'').localeCompare(b.obj||'','ru')||(a.room||'').localeCompare(b.room||'','ru')||(a.date||'').localeCompare(b.date||'')||(a.name||'').localeCompare(b.name||'','ru'));
   meta.multiObj=new Set(list.map(x=>x.obj||'')).size>1;
   const D=newDoc(meta);
+  D.codes=wallCodes(list);
   await coverPage(D,list);
   for(const p of list) await wallPages(D,p);
   await D.close();
@@ -1751,7 +1885,7 @@ async function makeEditableCopy(){
 }
 function renderDataView(p,body){
   const k=pxPerCm(p);
-  body.append(el('div',{class:'card'},el('h2',null,'Стена'),
+  body.append(el('div',{class:'card'},el('h2',null,kindOf(p).name),
     el('div',{class:'mut'},'Режим просмотра: правка отключена. Чтобы вносить изменения, создайте редактируемую копию внизу.'),
     el('div',null,el('b',null,(p.room?p.room+' — ':'')+p.name)),
     el('div',{class:'mut'},'Съёмка при монтаже: '+(fmtDate(p.date)||'дата не указана')),
@@ -1777,7 +1911,7 @@ function renderDataView(p,body){
   p.routes.forEach((r,i)=>{
     const t=TYPES[r.type]||TYPES.other;
     rc.append(el('div',{class:'item'},
-      el('span',{class:'dot',style:'background:'+t.color}),
+      el('span',{class:'dot',style:'background:'+routeColor(r)}),
       el('div',{class:'grow'},el('b',null,(i+1)+'. '+t.name),el('div',{class:'mut'},[routeLen(p,r),r.depth?'глубина '+r.depth+' см':'',r.note].filter(Boolean).join(' · ')||'без заметки'))));
   });
   body.append(rc);
@@ -1799,6 +1933,7 @@ function roomNames(obj){return [...new Set(S.projects.filter(x=>(x.obj||'')===(o
 function wordWalls(n){const a=n%10,b=n%100;return a===1&&b!==11?'стена':(a>=2&&a<=4&&(b<12||b>14))?'стены':'стен';}
 function wallLine(p){
   const parts=[];
+  if(p.kind&&p.kind!=='wall') parts.push(kindOf(p).name);
   if(p.date) parts.push(fmtDate(p.date));
   parts.push(p.routes.length+' '+plural(p.routes.length));
   if(p.fin) parts.push(isLinked(p)?'✓ привязано':'есть отделка, не привязано');
@@ -1873,7 +2008,7 @@ $('#brClose').addEventListener('click',closeBrowser);
 $('#brAdd').addEventListener('click',()=>{closeBrowser();addWallMenu();});
 
 /* ---------- Офлайн и установка ---------- */
-const APP_VERSION='6.1';
+const APP_VERSION='6.2';
 const OFF={sw:'checking',cached:false,persisted:null};
 const INST={evt:null};
 async function refreshOffline(){
@@ -1961,6 +2096,7 @@ if(typeof ResizeObserver!=='undefined'){
   setCurrent(S.projects.find(p=>p.id===last)||S.projects[S.projects.length-1]||null);
   setSaveState(DB.ok?'':'Хранилище недоступно: данные пропадут при закрытии страницы.');
   registerSW();refreshOffline().then(c=>{if(c) offlineChanged();});
+  if(location.hash==='#test') window.__t={S,ED,alignInfo,applySim,edToScr};
   if(!LS.get('skan-ack')){
     await modal({title:'Важно',text:'Приложение показывает сети по вашему чертежу и ориентировочно. Сети могли быть перенесены при ремонте, а наложение на камере имеет погрешность в несколько сантиметров. Перед сверлением всегда проверяйте стену кабелеискателем. Чертежи хранятся только на этом телефоне.',ok:'Понятно',cancel:null});
     LS.set('skan-ack','1');
