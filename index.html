@@ -394,7 +394,7 @@ function sanitizeProject(o){
   if(!Array.isArray(o.routes)||o.routes.length>2000) throw new Error('routes');
   const anchorsIn=Array.isArray(o.anchors)?o.anchors:[];
   if(anchorsIn.length>4) throw new Error('anchors');
-  const p={name:String(o.name||'Чертёж').slice(0,60),kind:Object.prototype.hasOwnProperty.call(KINDS,o.kind)?o.kind:'wall',obj:String(o.obj||'').slice(0,80),room:String(o.room||'').slice(0,60),
+  const p={name:String(o.name||'Чертёж').slice(0,60),kind:Object.prototype.hasOwnProperty.call(KINDS,o.kind)?o.kind:'wall',group:/^[A-Za-z0-9_-]{1,40}$/.test(String(o.group||''))?String(o.group):'',obj:String(o.obj||'').slice(0,80),room:String(o.room||'').slice(0,60),
     date:/^\d{4}-\d{2}-\d{2}$/.test(String(o.date||''))?o.date:'',
     scaleCm:(typeof o.scaleCm==='number'&&isFinite(o.scaleCm)&&o.scaleCm>0&&o.scaleCm<1e5)?o.scaleCm:0,
     img:o.img,w:num(o.w,1,10000),h:num(o.h,1,10000),viewOnly:o.viewOnly===true,brand:sanitizeBrand(o.brand),routes:[],anchors:[]};
@@ -405,6 +405,7 @@ function sanitizeProject(o){
       type:Object.prototype.hasOwnProperty.call(TYPES,r.type)?r.type:'other',
       color:HEXC.test(String(r.color||''))?String(r.color).toLowerCase():'',
       depth:String(r.depth==null?'':r.depth).slice(0,20),
+      out:String(r.out==null?'':r.out).slice(0,20),
       note:String(r.note==null?'':r.note).slice(0,300),
       pts:r.pts.map(pt=>{if(!Array.isArray(pt)||pt.length!==2) throw new Error('pt');return [num(pt[0],-1e5,1e5),num(pt[1],-1e5,1e5)];})
     });
@@ -480,15 +481,21 @@ const CAM={stream:null,mode:'off',pts:[],T:null,adj:IDENT,size:null,frozen:false
 const LETTERS=['A','B','C','D'];
 const routeColor=r=>(r&&HEXC.test(r.color||'')?r.color:(TYPES[r&&r.type]||TYPES.other).color);
 const kindOf=p=>KINDS[p&&p.kind]||KINDS.wall;
-function cleanText(t){return String(t==null?'':t).replace(/[^\p{L}\p{N} .,:;()№#+\/«»"'_–—-]/gu,'').replace(/\s+/g,' ').trim();}
+const SIBIMG=new Map();
+function sibImg(x){let im=SIBIMG.get(x.id);if(!im||im._src!==x.img){im=new Image();im._src=x.img;im.onload=()=>renderEditor();im.src=x.img;SIBIMG.set(x.id,im);}return im;}
+function sibs(p){return p&&p.group&&p.fin?S.projects.filter(x=>x!==p&&x.group===p.group&&x.fin&&x.fin.w===p.fin.w&&x.fin.h===p.fin.h&&alignInfo(x)):[];}
+const routeDims=r=>[r.depth?'глубина '+r.depth+' см':'',r.out?'выступ '+r.out+' см':''].filter(Boolean);
+function cleanText(t){return String(t==null?'':t).replace(/[^\p{L}\p{N} .,:;()№#+\/«»"'_–—·-]/gu,'').replace(/\s+/g,' ').trim();}
 function wallCodes(list){
-  const cnt=new Map(),m=new Map();
+  const cnt=new Map(),m=new Map(),gb=new Map(),gn=new Map();
   for(const p of list){
+    if(p.group&&gb.has(p.group)){const b=gb.get(p.group),k=(gn.get(p.group)||1)+1;gn.set(p.group,k);m.set(p,{code:b.code+'.'+k,label:b.label+'.'+k});continue;}
     const room=cleanText(p.room).replace(/[^\p{L}\p{N}]/gu,'').slice(0,3).toUpperCase();
     const key=(p.obj||'')+'|'+(p.kind||'wall')+'|'+room;
     const n=(cnt.get(key)||0)+1;cnt.set(key,n);
     const code=room?room+'-'+n:String(n);
     m.set(p,{code,label:kindOf(p).name+' '+code});
+    if(p.group) gb.set(p.group,m.get(p));
   }
   return m;
 }
@@ -655,7 +662,7 @@ function drawRoutes(ctx,p,map,o){
     }
     if(o.labels){
       const m=polyMid(pts);
-      label(ctx,t.name+(r.depth?' · '+r.depth+' см':''),m[0]+6,m[1]-6,'#fff');
+      label(ctx,t.name+(r.depth||r.out?' · '+[r.depth?r.depth+' см':'',r.out?'выступ '+r.out+' см':''].filter(Boolean).join(', '):''),m[0]+6,m[1]-6,'#fff');
     }
   }
 }
@@ -691,9 +698,9 @@ function renderEditor(){
   const v=S.view,A=alignInfo(p);
   cx.save();cx.translate(v.tx,v.ty);cx.scale(v.s,v.s);cx.drawImage(fr.im,0,0,fr.w,fr.h);
   if(L==='blend'&&A){
-    cx.globalAlpha=S.blend;
-    cx.transform(A.T.a,A.T.b,-A.T.b,A.T.a,A.T.tx,A.T.ty);
-    cx.drawImage(S.img,0,0,p.w,p.h);
+    const lay=(im,q,T)=>{if(!im||!im.complete||!im.naturalWidth) return;cx.save();cx.globalAlpha=S.blend;cx.transform(T.a,T.b,-T.b,T.a,T.tx,T.ty);cx.drawImage(im,0,0,q.w,q.h);cx.restore();};
+    lay(S.img,p,A.T);
+    for(const x of sibs(p)) lay(sibImg(x),x,alignInfo(x).T);
   }
   cx.restore();
   if(L==='rough'){
@@ -701,6 +708,7 @@ function renderEditor(){
     p.anchors.forEach((a,i)=>{const q=edToScr([a.x,a.y]);drawAnchor(cx,q[0],q[1],LETTERS[i],a.name,true);});
   }else{
     if(A) drawRoutes(cx,p,pt=>edToScr(applySim(A.T,pt)),{width:3,vertices:false,labels:false});
+    if(L==='blend') for(const x of sibs(p)){const Ax=alignInfo(x);drawRoutes(cx,x,pt=>edToScr(applySim(Ax.T,pt)),{width:3,vertices:false,labels:false});}
     p.fin.anchors.forEach((a,i)=>{const q=edToScr([a.x,a.y]),ra=p.anchors[i];drawAnchor(cx,q[0],q[1],LETTERS[i],ra?ra.name:'',L==='fin');});
   }
   if(S.meas.length){
@@ -782,7 +790,7 @@ async function edTap(x,y){
   const n=nearest(x,y);
   if(n&&n.kind==='route'){
     const r=n.item,q=[(n.pt[0]-S.view.tx)/S.view.s,(n.pt[1]-S.view.ty)/S.view.s];
-    toast((TYPES[r.type]||TYPES.other).name+(r.depth?', глубина '+r.depth+' см':'')+(r.note?' — '+r.note:'')+'.'+describePoint(p,q[0],q[1]),6000);
+    toast((TYPES[r.type]||TYPES.other).name+(routeDims(r).length?', '+routeDims(r).join(', '):'')+(r.note?' — '+r.note:'')+'.'+describePoint(p,q[0],q[1]),6000);
   }else if(n&&n.kind==='anchor'){
     toast('Опора '+LETTERS[n.i]+(n.item.name?': '+n.item.name:''),3500);
   }
@@ -848,7 +856,8 @@ $('#finReset').addEventListener('click',()=>{const f=S.cur&&S.cur.fin;if(!f) ret
 function routeFields(r){
   return [
     {key:'type',label:'Тип',type:'select',options:Object.entries(TYPES).map(([k,t])=>[k,t.name]),value:r.type},
-    {key:'depth',label:'Глубина от поверхности, см (необязательно)',value:r.depth||'',max:20,inputmode:'decimal'},
+    {key:'depth',label:'Глубина в стене, см (если сеть внутри)',value:r.depth||'',max:20,inputmode:'decimal'},
+    {key:'out',label:'Выступ над поверхностью, см (если сеть выходит из стены)',value:r.out||'',max:20,inputmode:'decimal'},
     {key:'color',label:'Цвет линии',type:'swatch',value:r.color||''},
     {key:'note',label:'Заметка (необязательно)',value:r.note||'',max:300}
   ];
@@ -857,7 +866,7 @@ $('#dDone').addEventListener('click',async()=>{
   if(S.draft.length<2){toast('Нужно минимум 2 точки');return;}
   const v=await modal({title:'Что это за трасса?',fields:routeFields({type:S.lastType,depth:'',note:''}),ok:'Добавить'});
   if(!v) return;
-  S.cur.routes.push({id:uid(),type:v.type,color:v.color||'',depth:v.depth.trim(),note:v.note.trim(),pts:S.draft.slice()});
+  S.cur.routes.push({id:uid(),type:v.type,color:v.color||'',depth:v.depth.trim(),out:v.out.trim(),note:v.note.trim(),pts:S.draft.slice()});
   S.lastType=v.type;S.draft=[];
   save();updateEditorUI();renderEditor();renderData();renderChips();
 });
@@ -1062,6 +1071,16 @@ async function addDrawing(file){
 }
 function todayLocal(){const d=new Date(),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
 async function createProject(r,fname){
+  const pb=S.partBase;S.partBase=null;
+  if(pb&&S.projects.includes(pb)&&pb.fin){
+    if(!pb.group) pb.group=uid();
+    const n=S.projects.filter(x=>x.group===pb.group).length+1;
+    const np={id:uid(),name:pb.name.replace(/ · монтаж \d+$/,'')+' · монтаж '+n,kind:pb.kind||'wall',group:pb.group,obj:pb.obj||'',room:pb.room||'',date:todayLocal(),scaleCm:0,img:r.img,w:r.w,h:r.h,routes:[],anchors:[],
+      fin:{img:pb.fin.img,w:pb.fin.w,h:pb.fin.h,date:pb.fin.date,anchors:[]},updated:Date.now()};
+    S.projects.push(np);setCurrent(np);save();switchTab('draw');
+    toast('Отметьте опорные точки на новом снимке монтажа, затем те же точки на слое «Отделка».',6000);
+    return;
+  }
   const cur=S.cur;
   const v=await modal({title:'Новая поверхность',text:'Выберите, что сняли, и укажите объект и комнату, чтобы потом быстро найти снимок.',fields:[
     {key:'kind',label:'Что снято',type:'select',options:Object.entries(KINDS).map(([k,t])=>[k,t.name]),value:cur&&cur.kind?cur.kind:'wall'},
@@ -1092,11 +1111,12 @@ const fileImg=$('#fileImg');
 const fileCam=$('#fileCam');
 fileCam.addEventListener('change',()=>{const f=fileCam.files[0];fileCam.value='';addDrawing(f);});
 function addWallMenu(){
+  S.partBase=null;
   modal({title:'Новая поверхность',text:'Сфотографируйте открытую стену, пол или потолок либо загрузите готовый чертёж.',ok:'Снять',extra:[{label:'Выбрать файл',action:()=>pickFile(false)}],cancel:'Отмена'}).then(v=>{if(v===true) capOpen();});
 }
 $('#btnAdd').addEventListener('click',addWallMenu);
-$('#btnShoot').addEventListener('click',()=>capOpen());
-$('#btnFirst').addEventListener('click',()=>pickFile(false));
+$('#btnShoot').addEventListener('click',()=>{S.partBase=null;capOpen();});
+$('#btnFirst').addEventListener('click',()=>{S.partBase=null;pickFile(false);});
 $('#btnOpenFile').addEventListener('click',()=>fileBak.click());
 fileImg.addEventListener('change',()=>{const f=fileImg.files[0];fileImg.value='';addDrawing(f);});
 $('#projBtn').addEventListener('click',()=>openBrowser());
@@ -1117,11 +1137,13 @@ function download(name,text){
 function scopeOptions(p){
   const sameObj=p.obj?S.projects.filter(x=>(x.obj||'')===p.obj):[p];
   const sameRoom=p.room?S.projects.filter(x=>(x.obj||'')===(p.obj||'')&&x.room===p.room):[p];
+  const sameGrp=p.group?S.projects.filter(x=>x.group===p.group):[p];
   const opts=[['one','Только «'+p.name+'»']];
+  if(sameGrp.length>1) opts.push(['grp','Эта стена со всеми фото монтажа ('+sameGrp.length+')']);
   if(p.room&&sameRoom.length>1) opts.push(['room','Все стены комнаты «'+p.room+'» ('+sameRoom.length+')']);
   if(p.obj&&sameObj.length>1) opts.push(['obj','Весь объект «'+p.obj+'» ('+sameObj.length+')']);
   if(S.projects.length>1&&S.projects.length>sameObj.length) opts.push(['all','Все стены ('+S.projects.length+')']);
-  return {opts,sameRoom,sameObj};
+  return {opts,sameRoom,sameObj,sameGrp};
 }
 async function fileDone(blob,name,mime,title,text){
   const file=new File([blob],name,{type:mime});
@@ -1135,7 +1157,7 @@ async function fileDone(blob,name,mime,title,text){
 }
 async function exportDialog(kind){
   const p=S.cur;if(!p) return;
-  const view=kind==='view',{opts,sameRoom,sameObj}=scopeOptions(p),fields=[];
+  const view=kind==='view',{opts,sameRoom,sameObj,sameGrp}=scopeOptions(p),fields=[];
   if(opts.length>1) fields.push({key:'scope',label:'Что включить',type:'select',options:opts,value:'one'});
   fields.push({key:'pw',label:'Пароль (необязательно)',type:'password'});
   const v=await modal({
@@ -1145,7 +1167,7 @@ async function exportDialog(kind){
       :'Файл останется на вашем телефоне. Пароль необязателен, но защитит чертёж, если файл попадёт к другому человеку. Забытый пароль восстановить нельзя.',
     fields,ok:'Сохранить'});
   if(!v) return;
-  const src=v.scope==='all'?S.projects:v.scope==='obj'?sameObj:v.scope==='room'?sameRoom:[p];
+  const src=v.scope==='all'?S.projects:v.scope==='obj'?sameObj:v.scope==='room'?sameRoom:v.scope==='grp'?sameGrp:[p];
   const b=BRAND.load(),brand=(b.name||b.contact||b.logo)?{name:b.name,contact:b.contact,logo:b.logo}:null;
   const list=src.map(x=>{const c=JSON.parse(JSON.stringify(x));if(view) c.viewOnly=true;if(brand&&!c.brand) c.brand=brand;return c;});
   const payload={format:'skan-stroitelstva',v:1,view:view||undefined,projects:list};
@@ -1198,7 +1220,7 @@ async function editRoute(r){
   if(RO()) return;
   const v=await modal({title:'Изменить трассу',fields:routeFields(r),ok:'Сохранить'});
   if(!v) return;
-  r.type=v.type;r.color=v.color||'';r.depth=v.depth.trim();r.note=v.note.trim();
+  r.type=v.type;r.color=v.color||'';r.depth=v.depth.trim();r.out=v.out.trim();r.note=v.note.trim();
   save();renderEditor();renderData();renderChips();
 }
 async function delRoute(r){
@@ -1263,13 +1285,14 @@ function renderData(){
     el('div',{class:'mut'},p.w+' × '+p.h+' пикселей')));
 
   body.append(finCard(p));
+  {const pc=partsCard(p);if(pc) body.append(pc);}
   const rc=el('div',{class:'card'},el('h2',null,'Трассы ('+p.routes.length+')'));
   if(!p.routes.length) rc.append(el('div',{class:'mut'},'Пока нет. На вкладке «Чертёж» выберите «Трасса».'));
   for(const r of p.routes){
     const t=TYPES[r.type]||TYPES.other;
     rc.append(el('div',{class:'item'},
       el('span',{class:'dot',style:'background:'+routeColor(r)}),
-      el('div',{class:'grow'},el('b',null,t.name),el('div',{class:'mut'},[routeLen(p,r),r.depth?'глубина '+r.depth+' см':'',r.note].filter(Boolean).join(' · ')||'без заметки')),
+      el('div',{class:'grow'},el('b',null,t.name),el('div',{class:'mut'},[routeLen(p,r),...routeDims(r),r.note].filter(Boolean).join(' · ')||'без заметки')),
       el('button',{onclick:()=>editRoute(r)},'Изменить'),
       el('button',{class:'danger',onclick:()=>delRoute(r)},'Удалить')));
   }
@@ -1293,6 +1316,23 @@ function renderData(){
     el('button',{onclick:()=>fileBak.click()},'Загрузить копию из файла'),
     el('button',{class:'danger',onclick:delProject},'Удалить этот чертёж')));
   body.append(storageCard());
+}
+async function addPart(){
+  const b=S.cur;if(!b||!b.fin||RO()) return;
+  const v=await modal({title:'Ещё фото монтажа',text:'Новый снимок монтажа этой же стены (другой участок или другой день). Снимок после отделки остаётся общим: на нём нужно отметить опорные точки нового снимка.',ok:'Снять',extra:[{label:'Выбрать файл',action:()=>{S.partBase=b;pickFile(false);}}],cancel:'Отмена'});
+  if(v===true){S.partBase=b;capOpen();}
+}
+function partsCard(p){
+  const mates=p.group?S.projects.filter(x=>x.group===p.group):[p];
+  if(!p.fin&&mates.length<2) return null;
+  const c=el('div',{class:'card'},el('h2',null,'Фото монтажа на общей отделке'),
+    el('div',{class:'mut'},'Если стену снимали в несколько заходов, добавьте ещё снимки монтажа: все они накладываются на один снимок после отделки.'));
+  if(mates.length>1) for(const m of mates){
+    c.append(el('div',{class:'item'},el('div',{class:'grow'},el('b',null,m.name+(m===p?' (открыт)':'')),el('div',{class:'mut'},(isLinked(m)?'✓ привязано':'не привязано')+' · '+m.routes.length+' '+plural(m.routes.length))),
+      m===p?null:el('button',{onclick:()=>{setCurrent(m);switchTab('draw');}},'Открыть')));
+  }
+  if(p.fin&&!RO()) c.append(el('button',{onclick:addPart},'Добавить ещё фото монтажа'));
+  return c;
 }
 function storageCard(){
   return el('div',{style:'display:contents'},offlineCard(),
@@ -1508,7 +1548,7 @@ function probeRender(){
   let msg;
   if(c.state==='noscale') msg='Чтобы проверять расстояния, задайте масштаб: вкладка «Данные» → «Задать масштаб».';
   else if(c.state==='outside') msg='Эта точка вне снимка монтажа, сети здесь не размечены. Проверьте стену кабелеискателем.';
-  else if(c.state==='bad') msg='Не сверлить без проверки. В радиусе '+c.R+' см по схеме проходит: '+c.near.slice(0,3).map(o=>{const t=TYPES[o.r.type]||TYPES.other;return t.name+' — '+(o.cm<0.5?'прямо в точке':fmtErr(o.cm)+' от точки')+(o.r.depth?', глубина '+o.r.depth+' см':'');}).join('; ')+'. Наложение неточное, проверьте стену прибором.';
+  else if(c.state==='bad') msg='Не сверлить без проверки. В радиусе '+c.R+' см по схеме проходит: '+c.near.slice(0,3).map(o=>{const t=TYPES[o.r.type]||TYPES.other;return t.name+' — '+(o.cm<0.5?'прямо в точке':fmtErr(o.cm)+' от точки')+(routeDims(o.r).length?', '+routeDims(o.r).join(', '):'');}).join('; ')+'. Наложение неточное, проверьте стену прибором.';
   else msg='В радиусе '+c.R+' см трасс по схеме нет. Это не гарантия: сети могли быть перенесены, а наложение неточное. Перед сверлением проверьте стену кабелеискателем.';
   out.className=c.state==='bad'?'bad':c.state==='none'?'none':'na';
   out.textContent=msg;out.hidden=false;
@@ -1627,7 +1667,7 @@ function put(D,text,o){
   return lines.length;
 }
 async function ensure(D,h,onNew){if(D.y+h>BOT){await D.close();D.open();if(onNew) onNew();}}
-function drawRepRoutes(x,p,map){
+function drawRepRoutes(x,p,map,off){
   p.routes.forEach((r,i)=>{
     const col=routeColor(r),pts=r.pts.map(map);
     x.lineJoin='round';x.lineCap='round';x.beginPath();x.moveTo(pts[0][0],pts[0][1]);
@@ -1636,7 +1676,7 @@ function drawRepRoutes(x,p,map){
     const m=polyMid(pts);
     x.beginPath();x.arc(m[0],m[1],18,0,Math.PI*2);x.fillStyle='#fff';x.fill();
     x.lineWidth=4;x.strokeStyle=col.toLowerCase()==='#ffffff'?'#000':col;x.stroke();
-    x.font=fontOf(22,true);x.fillStyle='#000';x.textAlign='center';x.textBaseline='middle';x.fillText(String(i+1),m[0],m[1]+1);
+    x.font=fontOf(22,true);x.fillStyle='#000';x.textAlign='center';x.textBaseline='middle';x.fillText(String(i+1+(off||0)),m[0],m[1]+1);
   });
   x.textAlign='left';x.textBaseline='alphabetic';
 }
@@ -1675,23 +1715,24 @@ async function coverPage(D,list){
   put(D,'Дата составления: '+fmtDate(todayLocal()),{size:26,color:'#344054'});
   put(D,'Позиций в паспорте: '+list.length,{size:26,color:'#344054'});
   D.y+=30;
-  const linked=list.filter(p=>p.fin&&alignInfo(p)).slice(0,2);
+  const seenG=new Set(),allLinked=list.filter(p=>p.fin&&alignInfo(p)&&(!p.group||(!seenG.has(p.group)&&seenG.add(p.group))));
+  const linked=allLinked.slice(0,2);
   if(linked.length){
     await ensure(D,780);
     put(D,'Совмещённый вид',{size:32,bold:true});
     put(D,'Снимок после отделки, поверх него снимок монтажа (полупрозрачно) и трассы.',{size:22,color:'#475467'});D.y+=10;
-    const gap=30,maxW=linked.length===1?PW-2*MG:(PW-2*MG-gap)/2,maxH=640,top=D.y;let used=0;
+    const gap=30,maxW=linked.length===1?PW-2*MG:(PW-2*MG-gap)/2,maxH=430,top=D.y;let used=0;
     for(let i=0;i<linked.length;i++){
-      const p=linked[i],A=alignInfo(p),imF=await loadImg(p.fin.img),imR=await loadImg(p.img);
+      const p=linked[i],parts=await compositeParts(D,p,list),imF=await loadImg(p.fin.img);
       const sc=Math.min(maxW/p.fin.w,maxH/p.fin.h),w=p.fin.w*sc,h=p.fin.h*sc;
       const x0=MG+i*(maxW+gap)+(maxW-w)/2;
-      drawComposite(D,p,A,imF,imR,x0,top,sc);
+      drawComposite(D,parts,imF,x0,top,sc);
       D.x.font=fontOf(22,true);D.x.fillStyle='#101828';D.x.textAlign='left';
-      D.x.fillText(fitText(D.x,D.codes.get(p).label,maxW),MG+i*(maxW+gap),top+h+30);
+      D.x.fillText(fitText(D.x,D.codes.get(p).label+(parts.length>1?' (снимков монтажа: '+parts.length+')':''),maxW),MG+i*(maxW+gap),top+h+30);
       used=Math.max(used,h+44);
     }
     D.y=top+used+10;
-    if(list.filter(p=>p.fin&&alignInfo(p)).length>2) put(D,'Остальные совмещённые виды — на страницах позиций.',{size:22,color:'#667085'});
+    if(allLinked.length>2) put(D,'Остальные совмещённые виды — на страницах позиций.',{size:22,color:'#667085'});
     D.y+=20;
   }
 
@@ -1699,7 +1740,7 @@ async function coverPage(D,list){
   for(const p of list){
     const k=pxPerCm(p);if(!k&&p.routes.length) noScale++;
     for(const r of p.routes){
-      const a=agg[r.type]||(agg[r.type]={n:0,cm:0,has:false});a.n++;
+      const a=agg[r.type]||(agg[r.type]={n:0,cm:0,has:false,cols:new Set()});a.n++;a.cols.add(routeColor(r).toLowerCase());
       if(k){let sl=0;for(let i=0;i<r.pts.length-1;i++) sl+=Math.hypot(r.pts[i+1][0]-r.pts[i][0],r.pts[i+1][1]-r.pts[i][1]);a.cm+=sl/k;a.has=true;}
     }
   }
@@ -1709,8 +1750,9 @@ async function coverPage(D,list){
   for(const kk of keys){
     const t=TYPES[kk]||TYPES.other,a=agg[kk];
     await ensure(D,44);
-    D.x.fillStyle=t.color;D.x.fillRect(MG,D.y+6,26,26);D.x.strokeStyle='#98a2b3';D.x.lineWidth=2;D.x.strokeRect(MG,D.y+6,26,26);
-    put(D,t.name+' — '+a.n+' '+plural(a.n)+(a.has?', '+fmtLen(a.cm):''),{size:26,x:MG+42});D.y+=4;
+    const cl=[...a.cols].slice(0,6);
+    cl.forEach((c,i)=>{D.x.fillStyle=c;D.x.fillRect(MG+i*32,D.y+6,26,26);D.x.strokeStyle='#98a2b3';D.x.lineWidth=2;D.x.strokeRect(MG+i*32,D.y+6,26,26);});
+    put(D,t.name+' — '+a.n+' '+plural(a.n)+(a.has?', '+fmtLen(a.cm):''),{size:26,x:MG+cl.length*32+10});D.y+=4;
   }
   if(noScale) put(D,'Длины посчитаны только для стен с заданным масштабом.',{size:22,color:'#667085'});
   D.y+=24;
@@ -1748,11 +1790,11 @@ async function coverPage(D,list){
   D.y+=h;
 }
 async function routeTable(D,p,title){
-  const k=pxPerCm(p),cols=[MG+10,MG+80,MG+380,MG+540,MG+720];
+  const k=pxPerCm(p),cols=[MG+10,MG+75,MG+330,MG+450,MG+580,MG+710];
   const head=()=>{
     D.x.fillStyle='#f2f4f7';D.x.fillRect(MG,D.y,PW-2*MG,50);
     D.x.font=fontOf(22,true);D.x.fillStyle='#344054';D.x.textAlign='left';D.x.textBaseline='alphabetic';
-    ['№','Тип сети','Глубина','Длина','Заметка'].forEach((h,i)=>D.x.fillText(h,cols[i],D.y+33));
+    ['№','Тип сети','Глубина','Выступ','Длина','Заметка'].forEach((h,i)=>D.x.fillText(h,cols[i],D.y+33));
     D.y+=56;
   };
   const cont=()=>{put(D,title+' (продолжение)',{size:30,bold:true});D.y+=10;head();};
@@ -1763,37 +1805,44 @@ async function routeTable(D,p,title){
   for(let i=0;i<p.routes.length;i++){
     const r=p.routes[i],t=TYPES[r.type]||TYPES.other;
     D.x.font=fontOf(22,false);
-    const lines=wrapLines(D.x,r.note||'',PW-MG-cols[4]-10).slice(0,3);
+    const lines=wrapLines(D.x,r.note||'',PW-MG-cols[5]-10).slice(0,3);
     const rowH=Math.max(46,Math.max(1,lines.length)*30+16);
     await ensure(D,rowH,cont);
     const x=D.x,y=D.y;
     x.strokeStyle='#e4e7ec';x.lineWidth=1.5;x.beginPath();x.moveTo(MG,y+rowH);x.lineTo(PW-MG,y+rowH);x.stroke();
     x.textAlign='left';x.textBaseline='alphabetic';
-    x.font=fontOf(22,true);x.fillStyle='#000';x.fillText(String(i+1),cols[0],y+31);
+    x.font=fontOf(22,true);x.fillStyle='#000';x.fillText(String(i+1+(D.numOff&&D.numOff.get(p)||0)),cols[0],y+31);
     x.fillStyle=routeColor(r);x.fillRect(cols[1],y+11,22,22);x.strokeStyle='#98a2b3';x.lineWidth=1.5;x.strokeRect(cols[1],y+11,22,22);
     x.font=fontOf(22,false);x.fillStyle='#101828';
     x.fillText(fitText(x,t.name,cols[2]-cols[1]-40),cols[1]+32,y+31);
     x.fillText(r.depth?r.depth+' см':'—',cols[2],y+31);
+    x.fillText(r.out?r.out+' см':'—',cols[3],y+31);
     let len='—';
     if(k){let sl=0;for(let j=0;j<r.pts.length-1;j++) sl+=Math.hypot(r.pts[j+1][0]-r.pts[j][0],r.pts[j+1][1]-r.pts[j][1]);len=fmtLen(sl/k);}
-    x.fillText(len,cols[3],y+31);
-    lines.forEach((ln,j)=>x.fillText(ln,cols[4],y+31+j*30));
+    x.fillText(len,cols[4],y+31);
+    lines.forEach((ln,j)=>x.fillText(ln,cols[5],y+31+j*30));
     D.y+=rowH;
   }
 }
 function wallLabel(D,p,sep){const c=D.codes&&D.codes.get(p);return c?c.label:kindOf(p).name;}
 function wallSub(D,p){return [D.meta.multiObj?cleanText(p.obj):'',cleanText(p.room),cleanText(p.name)].filter(Boolean).join(' · ');}
-function drawComposite(D,p,A,imFin,imRough,x0,y0,s){
-  const x=D.x;
-  x.drawImage(imFin,x0,y0,p.fin.w*s,p.fin.h*s);
-  x.save();x.beginPath();x.rect(x0,y0,p.fin.w*s,p.fin.h*s);x.clip();
-  x.translate(x0,y0);x.scale(s,s);x.globalAlpha=0.3;
-  x.transform(A.T.a,A.T.b,-A.T.b,A.T.a,A.T.tx,A.T.ty);x.drawImage(imRough,0,0,p.w,p.h);
-  x.restore();
-  x.strokeStyle='#d0d5dd';x.lineWidth=2;x.strokeRect(x0,y0,p.fin.w*s,p.fin.h*s);
-  drawRepRoutes(x,p,pt=>{const q=applySim(A.T,pt);return [x0+q[0]*s,y0+q[1]*s];});
+async function compositeParts(D,p,list){
+  const ms=p.group?list.filter(x=>x.group===p.group&&x.fin&&x.fin.w===p.fin.w&&x.fin.h===p.fin.h&&alignInfo(x)):(alignInfo(p)?[p]:[]);
+  const out=[];for(const x of ms) out.push({p:x,A:alignInfo(x),im:await loadImg(x.img)});return out;
 }
-async function wallPages(D,p){
+function drawComposite(D,parts,imFin,x0,y0,s){
+  const x=D.x,f=parts[0].p.fin;
+  x.drawImage(imFin,x0,y0,f.w*s,f.h*s);
+  for(const q of parts){
+    x.save();x.beginPath();x.rect(x0,y0,f.w*s,f.h*s);x.clip();
+    x.translate(x0,y0);x.scale(s,s);x.globalAlpha=0.3;
+    x.transform(q.A.T.a,q.A.T.b,-q.A.T.b,q.A.T.a,q.A.T.tx,q.A.T.ty);x.drawImage(q.im,0,0,q.p.w,q.p.h);
+    x.restore();
+  }
+  x.strokeStyle='#d0d5dd';x.lineWidth=2;x.strokeRect(x0,y0,f.w*s,f.h*s);
+  for(const q of parts) drawRepRoutes(x,q.p,pt=>{const t=applySim(q.A.T,pt);return [x0+t[0]*s,y0+t[1]*s];},D.numOff&&D.numOff.get(q.p)||0);
+}
+async function wallPages(D,p,list){
   const title=wallLabel(D,p),k=pxPerCm(p);
   await D.close();D.open();
   put(D,title,{size:40,bold:true});
@@ -1805,7 +1854,7 @@ async function wallPages(D,p){
   D.x.drawImage(im,x0,y0,dw,dh);
   D.x.strokeStyle='#d0d5dd';D.x.lineWidth=2;D.x.strokeRect(x0,y0,dw,dh);
   const map=pt=>[x0+pt[0]*s,y0+pt[1]*s];
-  drawRepRoutes(D.x,p,map);drawRepAnchors(D.x,p.anchors,map);
+  drawRepRoutes(D.x,p,map,D.numOff.get(p)||0);drawRepAnchors(D.x,p.anchors,map);
   D.y=y0+dh+30;
   await routeTable(D,p,title);
   D.y+=24;
@@ -1815,18 +1864,19 @@ async function wallPages(D,p){
     p.anchors.forEach((a,i)=>put(D,LETTERS[i]+' — '+(a.name||'без названия'),{size:24}));
     if(k) put(D,'Расстояние между A и B: '+fmtLen(p.scaleCm)+'.',{size:24,color:'#475467'});
   }
-  if(p.fin) await finishPage(D,p,title);
+  if(p.fin&&!(p.group&&D.finDone.has(p.group))){if(p.group) D.finDone.add(p.group);await finishPage(D,p,title,list);}
 }
-async function finishPage(D,p,title){
+async function finishPage(D,p,title,list){
   await D.close();D.open();
   put(D,title+' — после отделки',{size:40,bold:true});
   put(D,'Снимок после отделки: '+(fmtDate(p.fin.date)||'дата не указана'),{size:24,color:'#475467'});D.y+=14;
   const A=alignInfo(p),im=await loadImg(p.fin.img),maxW=PW-2*MG,maxH=800;
   const s=Math.min(maxW/p.fin.w,maxH/p.fin.h),dw=p.fin.w*s,dh=p.fin.h*s,x0=MG+(maxW-dw)/2,y0=D.y;
   const map=pt=>[x0+pt[0]*s,y0+pt[1]*s];
-  if(A) drawComposite(D,p,A,im,await loadImg(p.img),x0,y0,s);
+  const parts=await compositeParts(D,p,list);
+  if(parts.length) drawComposite(D,parts,im,x0,y0,s);
   else{D.x.drawImage(im,x0,y0,dw,dh);D.x.strokeStyle='#d0d5dd';D.x.lineWidth=2;D.x.strokeRect(x0,y0,dw,dh);}
-  drawRepAnchors(D.x,p.fin.anchors,map);
+  if(parts.length<2) drawRepAnchors(D.x,p.fin.anchors,map);
   D.y=y0+dh+30;
   put(D,A?'Показан снимок после отделки, поверх него снимок монтажа (полупрозрачно) и трассы. Номера совпадают с таблицей на предыдущей странице. '+alignText(p,A):'Совмещение со снимком монтажа не выполнено: на снимке отделки отмечено меньше двух опорных точек, поэтому трассы не показаны.',{size:24,color:'#344054'});
 }
@@ -1834,9 +1884,10 @@ async function buildReport(list,meta){
   list=list.slice().sort((a,b)=>(a.obj||'').localeCompare(b.obj||'','ru')||(a.room||'').localeCompare(b.room||'','ru')||(a.date||'').localeCompare(b.date||'')||(a.name||'').localeCompare(b.name||'','ru'));
   meta.multiObj=new Set(list.map(x=>x.obj||'')).size>1;
   const D=newDoc(meta);
-  D.codes=wallCodes(list);
+  D.codes=wallCodes(list);D.finDone=new Set();
+  D.numOff=new Map();{const acc=new Map();for(const p of list){if(p.group){D.numOff.set(p,acc.get(p.group)||0);acc.set(p.group,(acc.get(p.group)||0)+p.routes.length);}else D.numOff.set(p,0);}}
   await coverPage(D,list);
-  for(const p of list) await wallPages(D,p);
+  for(const p of list) await wallPages(D,p,list);
   await D.close();
   return makePdf(D.pages);
 }
@@ -1849,7 +1900,7 @@ function reportCard(p){
 }
 async function reportDialog(){
   const p=S.cur;if(!p) return;
-  const {opts,sameRoom,sameObj}=scopeOptions(p);
+  const {opts,sameRoom,sameObj,sameGrp}=scopeOptions(p);
   const saved=loadObj();
   const v=await modal({title:'Паспорт скрытых коммуникаций',text:'Объект и заказчик попадут на титульный лист. Данные исполнителя берутся из «Профиля бригады».',fields:[
     {key:'scope',label:'Что включить',type:'select',options:opts,value:'one'},
@@ -1859,7 +1910,7 @@ async function reportDialog(){
   if(!v) return;
   const own=BRAND.load(),meta={obj:v.obj.trim(),client:v.client.trim(),brand:own};
   saveObj({obj:meta.obj,client:meta.client});
-  const list=v.scope==='all'?S.projects.slice():v.scope==='obj'?sameObj:v.scope==='room'?sameRoom:[p];
+  const list=v.scope==='all'?S.projects.slice():v.scope==='obj'?sameObj:v.scope==='room'?sameRoom:v.scope==='grp'?sameGrp:[p];
   if(!(own.name||own.logo)){const b0=list.find(x=>x.brand);if(b0) meta.brand={name:b0.brand.name,contact:b0.brand.contact,logo:b0.brand.logo,badge:own.badge};}
   toast('Формирую PDF…',120000);
   let blob;
@@ -1912,7 +1963,7 @@ function renderDataView(p,body){
     const t=TYPES[r.type]||TYPES.other;
     rc.append(el('div',{class:'item'},
       el('span',{class:'dot',style:'background:'+routeColor(r)}),
-      el('div',{class:'grow'},el('b',null,(i+1)+'. '+t.name),el('div',{class:'mut'},[routeLen(p,r),r.depth?'глубина '+r.depth+' см':'',r.note].filter(Boolean).join(' · ')||'без заметки'))));
+      el('div',{class:'grow'},el('b',null,(i+1)+'. '+t.name),el('div',{class:'mut'},[routeLen(p,r),...routeDims(r),r.note].filter(Boolean).join(' · ')||'без заметки'))));
   });
   body.append(rc);
   const ac=el('div',{class:'card'},el('h2',null,'Опорные точки ('+p.anchors.length+')'));
@@ -1934,6 +1985,7 @@ function wordWalls(n){const a=n%10,b=n%100;return a===1&&b!==11?'стена':(a>
 function wallLine(p){
   const parts=[];
   if(p.kind&&p.kind!=='wall') parts.push(kindOf(p).name);
+  if(p.group&&S.projects.filter(x=>x.group===p.group).length>1) parts.push('часть общей отделки');
   if(p.date) parts.push(fmtDate(p.date));
   parts.push(p.routes.length+' '+plural(p.routes.length));
   if(p.fin) parts.push(isLinked(p)?'✓ привязано':'есть отделка, не привязано');
@@ -2008,7 +2060,7 @@ $('#brClose').addEventListener('click',closeBrowser);
 $('#brAdd').addEventListener('click',()=>{closeBrowser();addWallMenu();});
 
 /* ---------- Офлайн и установка ---------- */
-const APP_VERSION='6.2';
+const APP_VERSION='6.3';
 const OFF={sw:'checking',cached:false,persisted:null};
 const INST={evt:null};
 async function refreshOffline(){
@@ -2096,7 +2148,7 @@ if(typeof ResizeObserver!=='undefined'){
   setCurrent(S.projects.find(p=>p.id===last)||S.projects[S.projects.length-1]||null);
   setSaveState(DB.ok?'':'Хранилище недоступно: данные пропадут при закрытии страницы.');
   registerSW();refreshOffline().then(c=>{if(c) offlineChanged();});
-  if(location.hash==='#test') window.__t={S,ED,alignInfo,applySim,edToScr};
+  if(location.hash==='#test') window.__t={S,ED,alignInfo,applySim,edToScr,sibs};
   if(!LS.get('skan-ack')){
     await modal({title:'Важно',text:'Приложение показывает сети по вашему чертежу и ориентировочно. Сети могли быть перенесены при ремонте, а наложение на камере имеет погрешность в несколько сантиметров. Перед сверлением всегда проверяйте стену кабелеискателем. Чертежи хранятся только на этом телефоне.',ok:'Понятно',cancel:null});
     LS.set('skan-ack','1');
